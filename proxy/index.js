@@ -1,12 +1,18 @@
 const http = require("http");
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT; // 🔥 viktigt för Railway
 
 const APP_ID = process.env.BLIKK_APP_ID;
 const APP_SECRET = process.env.BLIKK_APP_SECRET;
 
 let accessToken = null;
 let tokenExpires = 0;
+
+// 🔐 sanity check
+if (!APP_ID || !APP_SECRET) {
+  console.error("❌ Missing env vars");
+  process.exit(1);
+}
 
 // 🔑 Hämta token
 async function getToken() {
@@ -24,13 +30,13 @@ async function getToken() {
 
   accessToken = data.accessToken;
 
-  // sätt expiry (fallback 1h)
+  // fallback expiry (1h)
   tokenExpires = Date.now() + (60 * 60 * 1000);
 
   console.log("🔑 Token refreshed");
 }
 
-// 🔁 Se till att token alltid finns
+// 🔁 Säkerställ att token finns
 async function ensureToken() {
   if (!accessToken || Date.now() > tokenExpires) {
     await getToken();
@@ -39,9 +45,11 @@ async function ensureToken() {
 
 const server = http.createServer(async (req, res) => {
   try {
+    console.log("👉 Request:", req.url);
+
     if (!req.url.startsWith("/blikk")) {
-      res.writeHead(404);
-      return res.end("Not found");
+      res.writeHead(200);
+      return res.end("OK");
     }
 
     await ensureToken();
@@ -49,7 +57,9 @@ const server = http.createServer(async (req, res) => {
     const path = req.url.replace("/blikk", "");
     const url = "https://publicapi.blikk.com" + path;
 
-    const response = await fetch(url, {
+    console.log("➡️ Forward:", url);
+
+    let response = await fetch(url, {
       method: req.method,
       headers: {
         "Authorization": `Bearer ${accessToken}`,
@@ -57,10 +67,25 @@ const server = http.createServer(async (req, res) => {
       }
     });
 
+    // 🔁 retry om token failar
+    if (response.status === 401) {
+      console.log("🔁 Token expired, refreshing...");
+      await getToken();
+
+      response = await fetch(url, {
+        method: req.method,
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Accept": "application/json"
+        }
+      });
+    }
+
     const text = await response.text();
 
     res.writeHead(response.status, {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*" // 🔥 för frontend
     });
 
     res.end(text);
@@ -72,6 +97,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// 🚀 starta server
 server.listen(PORT, () => {
   console.log(`🚀 Running on port ${PORT}`);
 });
